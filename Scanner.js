@@ -1,0 +1,175 @@
+// ===================================================================================
+// PENTING: Ganti URL di bawah ini dengan URL Web App dari Google Apps Script Anda!
+// ===================================================================================
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwIRdtqIlwaD9rVvZOIDI5pqWAnquCYKewpi-LO8dyv2SIEbGd8E8rsbJeMx_dITUTuvQ/exec";
+
+// Ambil elemen dari DOM
+const startScanButton = document.getElementById('start-scan-button');
+const stopRestartButton = document.getElementById('stop-restart-button');
+const readerContainer = document.getElementById('reader-container');
+const resultText = document.getElementById('result-text');
+const resultContainer = document.getElementById('result-container');
+const instructionText = document.getElementById('instruction-text');
+
+// Inisialisasi state aplikasi
+let lastScannedData = null;
+let isSending = false;
+let isScanning = false;
+
+// Inisialisasi scanner QR
+const html5QrCode = new Html5Qrcode("reader");
+
+// Inisialisasi AudioContext untuk umpan balik suara
+let audioContext;
+try {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+} catch (e) {
+    console.warn("Web Audio API tidak didukung di browser ini.");
+    audioContext = null;
+}
+
+// Fungsi untuk memainkan suara "bip"
+function playBeep() {
+    if (!audioContext) return;
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    gainNode.gain.value = 0.1; // Volume rendah
+    oscillator.frequency.value = 880; // Nada A5
+    oscillator.type = 'sine';
+    oscillator.start();
+    oscillator.stop(audioContext.currentTime + 0.1); // Durasi bip 0.1 detik
+}
+
+// Fungsi untuk menampilkan pesan error
+function displayError(title, message) {
+    resultContainer.className = 'mt-6 p-4 rounded-lg bg-red-100 flex items-center justify-center';
+    resultText.innerHTML = `<div class="text-red-800"><p class="font-semibold">${title}</p><p class="text-sm mt-1">${message}</p></div>`;
+    stopRestartButton.textContent = 'Coba Lagi';
+    stopRestartButton.classList.remove('hidden');
+    stopRestartButton.classList.replace('bg-red-600', 'bg-indigo-600');
+    stopRestartButton.classList.replace('hover:bg-red-700', 'hover:bg-indigo-700');
+}
+
+// Fungsi yang dipanggil ketika scan berhasil
+function onScanSuccess(decodedText, decodedResult) {
+    if (isSending || decodedText === lastScannedData) {
+        return; // Jangan proses jika sedang mengirim atau data sama
+    }
+
+    playBeep();
+    isSending = true;
+    lastScannedData = decodedText;
+
+    const timestamp = new Date().toLocaleString('id-ID', { dateStyle: 'full', timeStyle: 'long' });
+    
+    resultContainer.className = 'mt-6 p-4 rounded-lg bg-blue-100 flex items-center justify-center';
+    resultText.innerHTML = `
+        <div class="text-blue-800">
+            <p class="font-semibold">QR Terdeteksi!</p>
+            <p>Nama: <strong>${decodedText}</strong></p>
+            <p class="mt-2">Mengirim data ke server...</p>
+        </div>`;
+
+    const dataToSend = { name: decodedText, timestamp: timestamp };
+
+    // Kirim data ke Google Apps Script
+    fetch(SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors', // Penting untuk request ke Google Script dari client-side
+        cache: 'no-cache',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dataToSend)
+    })
+    .then(response => {
+        resultContainer.className = 'mt-6 p-4 rounded-lg bg-green-100 flex items-center justify-center';
+        resultText.innerHTML = `
+            <div class="text-green-800">
+                <p class="font-semibold">Berhasil!</p>
+                <p><strong>${decodedText}</strong> telah dicatat hadir pada:</p>
+                <p class="font-mono mt-1">${timestamp}</p>
+            </div>`;
+    })
+    .catch(error => {
+        console.error('Error sending data:', error);
+        displayError('Gagal Mengirim Data!', 'Silakan coba scan ulang. Pastikan koneksi internet stabil.');
+    })
+    .finally(() => {
+        // Beri jeda sebelum bisa scan lagi
+        setTimeout(() => {
+            isSending = false;
+            lastScannedData = null; 
+        }, 3000);
+    });
+}
+
+// Fungsi yang dipanggil ketika scan gagal (misal, tidak ada QR di frame)
+function onScanFailure(error) {
+    // Fungsi ini bisa diabaikan agar tidak menampilkan log yang tidak perlu
+}
+
+// Fungsi untuk memulai proses scan
+function startScanning() {
+    // Konfigurasi untuk scanner
+    const config = { 
+        fps: 10, 
+        qrbox: (viewfinderWidth, viewfinderHeight) => {
+            const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+            const qrboxSize = Math.floor(minEdge * 0.7);
+            return { width: qrboxSize, height: qrboxSize };
+        }
+    };
+
+    // Preferensi kamera belakang (environment)
+    const cameraConfig = { facingMode: "environment" };
+
+    html5QrCode.start(cameraConfig, config, onScanSuccess, onScanFailure)
+        .then(() => {
+            isScanning = true;
+            startScanButton.classList.add('hidden');
+            readerContainer.classList.remove('hidden');
+            stopRestartButton.textContent = 'Hentikan Kamera';
+            stopRestartButton.classList.remove('hidden');
+            stopRestartButton.classList.replace('bg-indigo-600', 'bg-red-600');
+            stopRestartButton.classList.replace('hover:bg-indigo-700', 'hover:bg-red-700');
+            instructionText.textContent = 'Arahkan kamera ke QR Code.';
+            resultContainer.className = 'mt-6 p-4 rounded-lg bg-gray-50';
+            resultText.textContent = 'Menunggu QR Code...';
+        })
+        .catch(err => {
+            console.error("Camera start error:", err);
+            displayError('Gagal Memulai Kamera', 'Pastikan Anda memberikan izin akses kamera untuk situs ini. Coba muat ulang halaman jika masalah berlanjut.');
+        });
+}
+
+// Fungsi untuk menghentikan scan
+function stopScanning() {
+    if (isScanning) {
+        html5QrCode.stop()
+            .then(() => {
+                isScanning = false;
+                readerContainer.classList.add('hidden');
+                startScanButton.classList.remove('hidden');
+                stopRestartButton.classList.add('hidden');
+                instructionText.textContent = 'Klik tombol di bawah untuk memulai kamera.';
+                resultText.textContent = 'Kamera dihentikan.';
+            })
+            .catch(err => {
+                console.error("Camera stop error:", err);
+                displayError('Gagal Menghentikan Kamera', 'Silakan muat ulang halaman.');
+            });
+    }
+}
+
+// Event listener untuk tombol "Mulai Scan"
+startScanButton.addEventListener('click', startScanning);
+
+// Event listener untuk tombol "Hentikan/Coba Lagi"
+stopRestartButton.addEventListener('click', () => {
+    if (stopRestartButton.textContent === 'Coba Lagi') {
+        location.reload(); // Muat ulang halaman jika error
+    } else {
+        stopScanning();
+    }
+});
